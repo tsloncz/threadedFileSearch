@@ -1,0 +1,12 @@
+Student NetID: alice999, I am working with bob99999.
+Compilation tested on: ned, skinner, marge ...
+Command for compile: gcc proj1.c -o proj1
+
+Experiment is conducted on ___which_machine_in_3353___
+D = {~}
+N        1              5               10              20              find
+time     
+
+D = {/}
+
+
