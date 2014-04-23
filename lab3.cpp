@@ -45,6 +45,12 @@ pthread_mutex_t thread_idle_mutex = PTHREAD_MUTEX_INITIALIZER;
 // mutex for reading a directory from the directory queue
 pthread_mutex_t read_from_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+// Declare semaphores
+//Semaphore for getting directory from que
+sem_t semReadQue;
+//Semaphore for writing path
+sem_t semWritePath;
+
 void* parallel_search(void*);   // Parallel directory search
 void recursive_search(string);  // Recursive directory search
 
@@ -80,9 +86,11 @@ int main(int argc, char* argv[])
     }
 
 
-
+    //Initialize semaphores
+    sem_init(&semReadQue, 0, 1);
+    sem_init(&semWritePath, 0, 1);
     // TODO: Declare threads...done
-		// declare thread
+	// declare thread
     pthread_t *thread_id = new pthread_t[thread_count];
     
     // flags for checking if thread is idle
@@ -95,13 +103,14 @@ int main(int argc, char* argv[])
     int name_list[thread_count]; // name of threads
                                  // to avoid confusion with thread_id
     // TODO: Create threads...done
-		// create thread, join thread
+	// create thread, join thread
     int id_list[thread_count];
     for(int i = 0; i < thread_count; i++)
     {
         id_list[i] = i;
+        thread_idle[i] = i;
         // create thread and pass thread_id[i] 
-				// (by reference) as the thread id
+		// (by reference) as the thread id
         pthread_create(&thread_id[i], NULL, parallel_search, &id_list[i]);
     }
     // TODO: Join threads...done
@@ -143,69 +152,116 @@ void* parallel_search(void* arg)
 {
     int* t_name = (int *) arg;
     pthread_mutex_lock(&outputting_mutex);
+    int allIdle = 0;
+    //cout << "Thread " << *t_name << " idle: " << thread_idle[*t_name]  << endl;
     cout << "Thread " << *t_name << " started." << endl;
     pthread_mutex_unlock(&outputting_mutex);
     while(true)
-    {
-				DIR *dir; //directory object returned from opendir()
-				string d_name;
-				//erno = 0; // Hold errors
-				// Lock to be sure only one thread grabs directory
-    		pthread_mutex_lock(&read_from_queue_mutex);
-				if( dir_queue.size() > 0 )
-				{
-					d_name = dir_queue.front();
-					dir_queue.pop_front();
-				}
-				// Release lock
-    		pthread_mutex_unlock(&read_from_queue_mutex);
+	{
+      for(int i = 0; i<thread_count; i++)
+      {
+         if( thread_idle[i] == 0 )
+         {
+           allIdle = 1;
+         }
+      }                                
+        if( allIdle == 1 && dir_queue.size() ==  0 )
+        {
+          break;
+        }
+		DIR *dir; //directory object returned from opendir()
+		string d_name;
+        string matchingFile;
+		bool criteriaSatisfied = 1;
+        //erno = 0; // Hold errors
+		
+        // Use semaphore to make sure only one thread
+        // can access at a time
+		sem_wait(&semReadQue);
+        thread_idle[*t_name] = 0;
+          if( dir_queue.size() > 0 )
+		  {
+			d_name = dir_queue.front();
+			dir_queue.pop_front();
+		  } 
+        //Post someone else can enter
+        sem_post(&semReadQue);
 
-				if( d_name != "" )
+		if( d_name != "" )
+		{
+			dirent* entry;
+			dir = opendir(d_name.c_str());
+            // Read through contents of directory
+			//readdir() return pointer to object of type dirent
+			// *****Assigment to entry must be done in loop because
+			// Recalling readddir effects it's contents and
+			// it will read the directory incorrectly******	
+			while( (entry = readdir(dir)) != NULL )
+			{
+				struct stat sb;
+				if(entry->d_type == IS_DIRECTORY )
 				{
-						dirent* entry;
-						dir = opendir(d_name.c_str());
-		      	cout <<  "Thread " << *t_name << " searching " << d_name << endl;
-						// Read through contents of directory
-						//readdir() return pointer to object of type dirent
-						// *****Assigment to entry must be done in loop because
-						// Recalling readddir effects it's contents and
-						// it will read the directory incorrectly********						
-						while( (entry = readdir(dir)) != NULL )
-						{
-								struct stat sb;
-								if(entry->d_type == IS_DIRECTORY )
-								{
-										//string directory = entry->d_name;
-										cout << "found directory: " << entry->d_name << endl;
-										if( entry->d_name != "." && entry->d_name != "..")
-												dir_queue.push_back(d_name+entry->d_name);
-										//cout << "  length: " << entry->d_reclen << endl;
-								}
-								else if( entry->d_type == IS_SYMLINK )
-								{
-										break;
-								}
-								else
-								{
-										string full_path = d_name+entry->d_name;	// path to a file
-										struct stat filestatus; 		// the buffer
-										cout << "file: " << full_path << " ";
-										int ret = stat(full_path.c_str(), &filestatus);
-										if(ret == 0)
-										{
-											cout << "  size: " << filestatus.st_size << endl;
-										}
-										//cout << "  length: " << entry->d_reclen << endl;
-								}
-
-								//cout << "  Found: " << entry->d_name;
-								//cout << "  Type: " << entry->d_type;
-								//cout << "  Length:  " << entry->d_reclen << endl;
-						}
-						closedir(dir); // Close directory
+					string directory = entry->d_name;
+                    // exclude parent directories
+					if( directory != "." && directory != ".." && directory
+                        !=".git")
+                    {
+                        //Add directory to que to be searched
+						dir_queue.push_back(d_name+directory+"/");
+                    }
 				}
-				
-				break;
+                // Ignore symbolic linkds
+				else if( entry->d_type == IS_SYMLINK )
+				{
+					break;
+				}
+				else //found file
+				{
+                    string name = entry->d_name;
+                    string full_path = d_name+"/"+entry->d_name;
+                    int foundPattern = name.find(pattern);
+                    if( pattern != "") // need to match
+                    {
+                      if( foundPattern >= 0)
+                      {
+                        criteriaSatisfied = 1;
+                        matchingFile = full_path;
+                        //cout << "file " << matchingFile << endl;
+                      }
+                      else
+                      {
+                        criteriaSatisfied = 0;
+                      }
+                    }
+				  	 struct stat filestatus; 		// the buffer
+                     int ret = stat(full_path.c_str(), &filestatus);
+                     //Don't bother checking size if file already failed
+					 if(ret == 0 && criteriaSatisfied == 1) 
+					 {
+                        if(filestatus.st_size<min_size)
+                        {
+                          criteriaSatisfied = 0;
+                          matchingFile = full_path;
+                        }
+                        if(filestatus.st_size>max_size)
+                        {
+                          criteriaSatisfied = 0;
+                          matchingFile = full_path;
+                        }
+                      }
+					//cout << "  length: " << entry->d_reclen << endl;
+                  if(criteriaSatisfied == 1)
+                  {
+                    sem_wait(&semWritePath);
+                      cout << "File: " << matchingFile << endl;
+                    sem_post(&semWritePath);
+                  }
+				}
+			}
+			closedir(dir); // Close directory
+            thread_idle[*t_name] = 1;
+        }
+		//break;
         // Thread terminates (break the loop) if both of the following 
         // conditions are true
         // 1. All threads have nothing to work on. (all thread_idle 
@@ -214,16 +270,16 @@ void* parallel_search(void* arg)
 
         // If the loop continues
         // Each thread grabs a directory from the queue and process it
-        // 1. open the directory
+        // 1. open the directory...done
         // 2. keep reading the directory
-        //    - for each entry, check if it is a directory or a file
+        //    - for each entry, check if it is a directory or a file...done
         //    - if it is a directory, check if it satisfies the criteria.
         //      If it satisfies, output the full path.
         //    - No matter the directory satisfies the criteria or not, add 
         //      it to the queue for processing its subdirectory.
         //    - if it is a file, check if it satisfies the criteria.
         //      If it satisfies, output the full path.
-        // 3. close the direcotry
+        // 3. close the direcotry...done
 		
     }
 		
@@ -231,8 +287,8 @@ void* parallel_search(void* arg)
     cout << "Thread " << *t_name << " terminated." << endl;
     pthread_mutex_unlock(&outputting_mutex);
 
-    // TODO: terminate the thread.
-		pthread_exit(t_name);
+    // TODO: terminate the thread...done
+	pthread_exit(t_name);
 }
 
 

@@ -189,7 +189,7 @@ void* parallel_search(void* arg)
 								{
 										string full_path = d_name+entry->d_name;	// path to a file
 										struct stat filestatus; 		// the buffer
-										cout << "file: " << endl << full_path << " ";
+										cout << "file: " << full_path << " ";
 										int ret = stat(full_path.c_str(), &filestatus);
 										if(ret == 0)
 										{
