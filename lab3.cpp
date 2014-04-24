@@ -50,6 +50,10 @@ pthread_mutex_t read_from_queue_mutex = PTHREAD_MUTEX_INITIALIZER;
 sem_t semReadQue;
 //Semaphore for writing path
 sem_t semWritePath;
+//Semaphore for writing path
+sem_t semWritePathDir;
+//Semaphore for addding dir to que
+sem_t semQuePush;
 
 void* parallel_search(void*);   // Parallel directory search
 void recursive_search(string);  // Recursive directory search
@@ -89,6 +93,8 @@ int main(int argc, char* argv[])
     //Initialize semaphores
     sem_init(&semReadQue, 0, 1);
     sem_init(&semWritePath, 0, 1);
+    sem_init(&semWritePathDir, 0, 1);
+    sem_init(&semQuePush, 0, 1);
     // TODO: Declare threads...done
 	// declare thread
     pthread_t *thread_id = new pthread_t[thread_count];
@@ -108,7 +114,7 @@ int main(int argc, char* argv[])
     for(int i = 0; i < thread_count; i++)
     {
         id_list[i] = i;
-        thread_idle[i] = i;
+        thread_idle[i] = 0;
         // create thread and pass thread_id[i] 
 		// (by reference) as the thread id
         pthread_create(&thread_id[i], NULL, parallel_search, &id_list[i]);
@@ -151,10 +157,9 @@ int main(int argc, char* argv[])
 void* parallel_search(void* arg)
 {
     int* t_name = (int *) arg;
-    pthread_mutex_lock(&outputting_mutex);
     int allIdle = 0;
-    //cout << "Thread " << *t_name << " idle: " << thread_idle[*t_name]  << endl;
-    cout << "Thread " << *t_name << " started." << endl;
+    pthread_mutex_lock(&outputting_mutex);
+      cout << "Thread " << *t_name << " started." << endl;
     pthread_mutex_unlock(&outputting_mutex);
     while(true)
 	{
@@ -162,24 +167,25 @@ void* parallel_search(void* arg)
       {
          if( thread_idle[i] == 0 )
          {
-           allIdle = 1;
+           //There is a thread working
+           break;
          }
+         allIdle = 1;
+         //cout << "All threads idle" << endl;
       }                                
-        if( allIdle == 1 && dir_queue.size() ==  0 )
+        if( allIdle == 1 && dir_queue.empty() )
         {
           break;
         }
 		DIR *dir; //directory object returned from opendir()
-		string d_name;
+		string d_name = "";
         string matchingFile;
-		bool criteriaSatisfied = 1;
-        //erno = 0; // Hold errors
 		
         // Use semaphore to make sure only one thread
         // can access at a time
 		sem_wait(&semReadQue);
-        thread_idle[*t_name] = 0;
-          if( dir_queue.size() > 0 )
+          thread_idle[*t_name] = 0;
+          if( !dir_queue.empty() )
 		  {
 			d_name = dir_queue.front();
 			dir_queue.pop_front();
@@ -191,34 +197,51 @@ void* parallel_search(void* arg)
 		{
 			dirent* entry;
 			dir = opendir(d_name.c_str());
-            // Read through contents of directory
-			//readdir() return pointer to object of type dirent
-			// *****Assigment to entry must be done in loop because
-			// Recalling readddir effects it's contents and
-			// it will read the directory incorrectly******	
-			while( (entry = readdir(dir)) != NULL )
-			{
-				struct stat sb;
-				if(entry->d_type == IS_DIRECTORY )
-				{
-					string directory = entry->d_name;
-                    // exclude parent directories
-					if( directory != "." && directory != ".." && directory
-                        !=".git")
-                    {
+            if(errno != 0)
+            {
+              cout << "opendir error. " << strerror(errno) << endl;
+            }
+            else if(dir)
+            {
+              errno = 0;
+              // Read through contents of directory
+			  //readdir() return pointer to object of type dirent
+			  // *****Assigment to entry must be done in loop because
+			  // Recalling readddir effects it's contents and
+			  // it will read the directory incorrectly******	
+			  while( (entry = readdir(dir)) != NULL )
+			  {
+                  bool criteriaSatisfied = 1;
+				  struct stat sb;
+				  if(entry->d_type == IS_DIRECTORY )
+				  {
+					  string directory = entry->d_name;
+                      int foundPatternDir = directory.find(pattern);
+                      // exclude parent directories
+					  if( directory != "." && directory != ".." &&
+                          directory != ".snapshot")
+                      {
+                        if( pattern != "" && foundPatternDir >= 0) // need to match
+                        {
+                            cout << "Directory: " << d_name+directory+"/" << endl;
+                        }
                         //Add directory to que to be searched
-						dir_queue.push_back(d_name+directory+"/");
-                    }
-				}
-                // Ignore symbolic linkds
-				else if( entry->d_type == IS_SYMLINK )
-				{
-					break;
-				}
-				else //found file
-				{
+                        string dirPath = d_name+directory+"/";
+                        sem_wait(&semQuePush);
+                          dir_queue.push_back(dirPath);
+                          //cout << "Added to que: " << dirPath << endl;
+                        sem_post(&semQuePush);
+                      }
+				  }
+                  // Ignore symbolic linkds
+			  	  else if( entry->d_type == IS_SYMLINK )
+				  {
+					  break;
+				  }
+				  else //found file
+				  {
                     string name = entry->d_name;
-                    string full_path = d_name+"/"+entry->d_name;
+                    string full_path = d_name+entry->d_name;
                     int foundPattern = name.find(pattern);
                     if( pattern != "") // need to match
                     {
@@ -226,18 +249,21 @@ void* parallel_search(void* arg)
                       {
                         criteriaSatisfied = 1;
                         matchingFile = full_path;
-                        //cout << "file " << matchingFile << endl;
                       }
                       else
-                      {
+                      { 
                         criteriaSatisfied = 0;
                       }
                     }
-				  	 struct stat filestatus; 		// the buffer
-                     int ret = stat(full_path.c_str(), &filestatus);
-                     //Don't bother checking size if file already failed
-					 if(ret == 0 && criteriaSatisfied == 1) 
-					 {
+                    else
+                    {
+                      matchingFile = full_path;
+                    }
+				  	struct stat filestatus; 		// the buffer
+                    int ret = stat(full_path.c_str(), &filestatus);
+                    //Don't bother checking size if file already failed
+					  if(ret == 0 && criteriaSatisfied == 1) 
+					  {
                         if(filestatus.st_size<min_size)
                         {
                           criteriaSatisfied = 0;
@@ -250,15 +276,21 @@ void* parallel_search(void* arg)
                         }
                       }
 					//cout << "  length: " << entry->d_reclen << endl;
-                  if(criteriaSatisfied == 1)
-                  {
-                    sem_wait(&semWritePath);
-                      cout << "File: " << matchingFile << endl;
-                    sem_post(&semWritePath);
-                  }
-				}
-			}
-			closedir(dir); // Close directory
+                    if(criteriaSatisfied == 1)
+                    {
+                      sem_wait(&semWritePath);
+                        cout << "File: " << matchingFile << endl;
+                      sem_post(&semWritePath);
+                    }
+                    criteriaSatisfied = 1;
+				  }
+			  }
+              if(errno != 0)
+              {
+                cout << "readdir error. " << strerror(errno) << endl;
+              }
+            }
+            closedir(dir); // Close directory
             thread_idle[*t_name] = 1;
         }
 		//break;
@@ -274,11 +306,11 @@ void* parallel_search(void* arg)
         // 2. keep reading the directory
         //    - for each entry, check if it is a directory or a file...done
         //    - if it is a directory, check if it satisfies the criteria.
-        //      If it satisfies, output the full path.
+        //      If it satisfies, output the full path....done
         //    - No matter the directory satisfies the criteria or not, add 
-        //      it to the queue for processing its subdirectory.
+        //      it to the queue for processing its subdirectory....done
         //    - if it is a file, check if it satisfies the criteria.
-        //      If it satisfies, output the full path.
+        //      If it satisfies, output the full path....done
         // 3. close the direcotry...done
 		
     }

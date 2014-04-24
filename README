@@ -1,0 +1,16 @@
+Student NetID: slonczti, I am working with curljosh
+Compilation tested on: skinner...
+Command for compile: gcc proj1.c -o proj1
+
+Experiment is conducted on ___which_machine_in_3353___
+D = {~}
+N        1              5               10              20              find
+time   	3.529s		   1.84s  	      1.8106s			1.762s				9s
+
+D = {~/410cse}
+N        1              5               10              20              find
+time   	0.022s		  0.0107s  		  0.0151s		 0.0232s			0.20s
+
+Our test cases that use the home directory do not look through the ".snapshot" directory. The reason for this is we could not get find to look through it, so to be fair we just excluded it from find and our program.
+
+Searching through the home directory gives faster results with more threads. For ~/410cse however, time peaks at 5 threads and then decreases. This is likely due to the overhead of threads for searching such as small directory.
