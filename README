@@ -1,6 +1,6 @@
 Student NetID: slonczti, I am working with curljosh
 Compilation tested on: skinner...
-Command for compile: gcc proj1.c -o proj1
+Command for compile: make
 
 Experiment is conducted on ___which_machine_in_3353___
 D = {~}
